@@ -1,6 +1,6 @@
 # Mira — Gemma AI Avatar (Android)
 
-An Android Kotlin prototype with an animated 2D female-style avatar, Bengali chat and TTS, voice input, optional front-camera preview with on-device smile detection, and one-tap model download.
+An Android Kotlin prototype with a real-time procedural 3D female-style avatar rendered with OpenGL ES 2.0, Bengali chat and TTS, voice input, optional front-camera preview with on-device smile detection, and one-tap model download.
 
 ## Model download
 
@@ -18,11 +18,11 @@ This version uses Google's MediaPipe LLM Inference Android API because the publi
 
 ## Avatar, camera, and voice
 
-- Animated 2D avatar with talking mouth, arm movement, and simple happy/sad/surprised expression cues.
+- Procedural 3D avatar rendered locally with OpenGL ES 2.0; includes shaded face, hair, eyes, torso and arms, subtle idle motion, talking mouth movement, and simple expression cues. No external 3D asset download is required.
 - Optional front camera preview and on-device ML Kit smile detection. The camera is not streamed to Gemma and no camera frames are uploaded by this implementation.
 - Bengali Android Text-to-Speech depends on a Bengali voice installed on the device.
 - Android SpeechRecognizer may use a network-backed recognition service; offline speech recognition is not guaranteed.
-- The avatar is an animated illustration, not a photorealistic 3D human.
+- The avatar is a stylized procedural 3D character made from shaded geometry, not a photorealistic scanned human or a full rigged `.glb` model. It is a starter 3D implementation and needs device testing and visual refinement.
 - The current camera feature detects smile probability only; it does not identify the user or infer complex emotions.
 
 ## Build in Termux
