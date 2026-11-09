@@ -220,8 +220,8 @@ private class SphereMesh(latitudeBands: Int, longitudeBands: Int) {
             for (lon in 0 until longitudeBands) {
                 val first = (lat * (longitudeBands + 1) + lon).toShort()
                 val second = (first.toInt() + longitudeBands + 1).toShort()
-                idx.add(first); idx.add(second); idx.add((first + 1).toShort())
-                idx.add(second); idx.add((second + 1).toShort()); idx.add((first + 1).toShort())
+                idx.add(first); idx.add((first + 1).toShort()); idx.add(second)
+                idx.add(second); idx.add((first + 1).toShort()); idx.add((second + 1).toShort())
             }
         }
         val array = FloatArray(data.size) { data[it] }
