@@ -7,23 +7,27 @@ import android.content.pm.PackageManager
 import android.graphics.*
 import android.net.Uri
 import android.os.Bundle
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.text.InputType
-import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
+import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetector
+import com.google.mlkit.vision.face.FaceDetectorOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,88 +35,109 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.KeyStore
+import java.security.MessageDigest
 import java.util.Locale
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
+import java.util.concurrent.Executors
 import kotlin.coroutines.coroutineContext
 
 class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
-    private var engine: Engine? = null
-    private var conversation: com.google.ai.edge.litertlm.Conversation? = null
+    private var llm: LlmInference? = null
     private lateinit var log: TextView
     private lateinit var state: TextView
     private lateinit var prompt: EditText
     private lateinit var avatar: AvatarView
+    private lateinit var previewView: PreviewView
     private lateinit var downloadProgress: ProgressBar
     private lateinit var downloadLabel: TextView
     private lateinit var downloadButton: Button
+    private lateinit var cameraButton: Button
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
     private var downloadJob: Job? = null
     @Volatile private var activeConnection: HttpURLConnection? = null
-
-    private val modelName = "gemma3-1b-it-int4.litertlm"
+    private var faceDetector: FaceDetector? = null
+    private val cameraExecutor = Executors.newSingleThreadExecutor()
+    private val modelName = "gemma3-1b-it-int4.task"
     private val modelFile get() = File(filesDir, modelName)
-    private val modelUrl = "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.litertlm"
-    private var hfToken: String? = null
+    private val modelUrl = "https://huggingface.co/MiCkSoftware/Gemma3-1B-IT-LiteRT/resolve/main/gemma3-1b-it-int4.task"
+    private val expectedSha256 = "e3d981c01aeaaac69a84ffa0d4be13281b3176731063f1bea1c9fe6887bd9dee"
 
     private val modelPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) lifecycleScope.launch(Dispatchers.IO) {
             try {
                 contentResolver.openInputStream(uri)?.use { input ->
-                    File(filesDir, modelName).outputStream().use(input::copyTo)
+                    FileOutputStream(modelFile).use { output -> input.copyTo(output) }
                 } ?: error("ফাইল খোলা যায়নি")
                 withContext(Dispatchers.Main) { loadModel() }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { state.text = "Model copy error: ${e.message}" }
+                withContext(Dispatchers.Main) { state.text = "Model copy error: \${e.message}" }
             }
         }
     }
 
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startCamera() else state.text = "ক্যামেরা ব্যবহারের অনুমতি দেওয়া হয়নি"
+    }
+    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) startVoiceRecognition() else state.text = "মাইক্রোফোনের অনুমতি দেওয়া হয়নি"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        hfToken = TokenVault.read(this)
         tts = TextToSpeech(this, this)
-        buildUi()
+        val options = FaceDetectorOptions.Builder()
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+            .enableTracking()
+            .build()
+        faceDetector = FaceDetection.getClient(options)
         if (SpeechRecognizer.isRecognitionAvailable(this)) recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        if (modelFile.exists() && modelFile.length() > 100_000_000L) loadModel()
-        updateDownloadButton()
+        buildUi()
+        if (modelFile.exists() && modelFile.length() > 500_000_000L) loadModel()
     }
 
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 12, 16, 12)
-            setBackgroundColor(Color.rgb(9, 15, 29))
+            setPadding(14, 8, 14, 8)
+            setBackgroundColor(Color.rgb(9, 14, 29))
         }
         val title = TextView(this).apply {
-            text = "✦  GEMMA AI AVATAR"; textSize = 21f; gravity = Gravity.CENTER
-            setTextColor(Color.WHITE); setPadding(0, 8, 0, 3)
+            text = "✦  MIRA • GEMMA AI"; textSize = 21f; gravity = Gravity.CENTER
+            setTextColor(Color.WHITE); setPadding(0, 8, 0, 2)
         }
         val subtitle = TextView(this).apply {
-            text = "YOUR PRIVATE • ON-DEVICE AI COMPANION"
+            text = "YOUR PRIVATE ON-DEVICE AI COMPANION"
             textSize = 10f; gravity = Gravity.CENTER; setTextColor(Color.rgb(121, 190, 224))
-            setPadding(0, 0, 0, 8)
+            setPadding(0, 0, 0, 6)
         }
         state = TextView(this).apply {
-            text = "OFFLINE AI • Model not installed"
-            textSize = 12f; gravity = Gravity.CENTER; setTextColor(Color.rgb(115, 225, 185))
+            text = "AI offline model not installed"; textSize = 12f
+            gravity = Gravity.CENTER; setTextColor(Color.rgb(115, 225, 185))
         }
         avatar = AvatarView(this)
+        previewView = PreviewView(this).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            visibility = View.GONE
+        }
+        val visualRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(avatar, LinearLayout.LayoutParams(0, 230, 1f))
+            addView(previewView, LinearLayout.LayoutParams(112, 150))
+            gravity = Gravity.CENTER
+        }
         log = TextView(this).apply {
-            text = "স্বাগতম! আমি Gemma AI Avatar.\nপ্রথমে Hugging Face থেকে Gemma 3 1B মডেল ডাউনলোড করুন।"
+            text = "হ্যালো! আমি মীরা। আমাকে Download Gemma চাপ দিয়ে প্রস্তুত করুন।"
             textSize = 15f; setTextColor(Color.WHITE); setPadding(12, 12, 12, 12)
         }
         val scroll = ScrollView(this).apply {
             addView(log); setBackgroundColor(Color.rgb(24, 34, 53))
         }
         prompt = EditText(this).apply {
-            hint = "এখানে লিখুন…"; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY)
+            hint = "আমাকে কিছু বলুন…"; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY)
             maxLines = 3
         }
         val send = Button(this).apply { text = "Send"; setOnClickListener { sendMessage() } }
@@ -122,118 +147,97 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             addView(prompt, LinearLayout.LayoutParams(0, -2, 1f)); addView(mic); addView(send)
         }
         downloadButton = Button(this).apply {
-            text = "⬇ Download Gemma 3 1B (~584 MB)"
+            text = "⬇ এক চাপেই Gemma 3 1B ডাউনলোড"
             setOnClickListener { onDownloadClicked() }
         }
-        val tokenButton = Button(this).apply {
-            text = "Hugging Face Access / Change Token"
-            setOnClickListener { showTokenDialog() }
+        cameraButton = Button(this).apply {
+            text = "📷 ক্যামেরা চালু"
+            setOnClickListener { toggleCamera() }
         }
         val choose = Button(this).apply {
-            text = "Choose Existing .litertlm Model"
+            text = "আগে থেকে থাকা .task মডেল নির্বাচন"
             setOnClickListener { modelPicker.launch(arrayOf("application/octet-stream", "*/*")) }
         }
         downloadProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100; progress = 0; visibility = View.GONE
         }
         downloadLabel = TextView(this).apply {
-            text = "Model download: ready"; textSize = 11f
+            text = "মডেল ডাউনলোডের জন্য প্রস্তুত"; textSize = 11f
             setTextColor(Color.LTGRAY); gravity = Gravity.CENTER
         }
-        root.addView(title)
-        root.addView(subtitle)
-        root.addView(state)
-        root.addView(avatar, LinearLayout.LayoutParams(-1, 190))
+        root.addView(title); root.addView(subtitle); root.addView(state)
+        root.addView(visualRow)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         root.addView(inputRow)
         root.addView(downloadButton)
         root.addView(downloadProgress)
         root.addView(downloadLabel)
-        root.addView(tokenButton)
+        root.addView(cameraButton)
         root.addView(choose)
         setContentView(root)
-    }
-
-    private fun updateDownloadButton() {
-        downloadButton.text = if (modelFile.exists() && modelFile.length() > 100_000_000L)
-            "↻ Download Gemma 3 1B Again" else "⬇ Download Gemma 3 1B (~584 MB)"
     }
 
     private fun onDownloadClicked() {
         if (downloadJob?.isActive == true) {
             downloadJob?.cancel()
             activeConnection?.disconnect()
-            downloadLabel.text = "Download cancelled. Partial file kept for resume."
-            state.text = "Download paused"
+            downloadLabel.text = "ডাউনলোড থামানো হয়েছে; পরে আবার চালালে চলবে"
             return
         }
-        val token = hfToken
-        if (token.isNullOrBlank()) showTokenDialog() else startModelDownload(token)
-    }
-
-    private fun showTokenDialog() {
-        val field = EditText(this).apply {
-            hint = "hf_… Read access token"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setSingleLine(true)
-            hfToken?.let { setText(it) }
+        val consent = CheckBox(this).apply {
+            text = "আমি Gemma Terms of Use পড়েছি এবং মেনে নিয়ে মডেলটি ব্যবহার করতে সম্মত"
+            setTextColor(Color.DKGRAY)
+            setPadding(18, 12, 18, 12)
         }
         val message = TextView(this).apply {
-            text = "প্রথমে Hugging Face-এ লগইন করে Gemma license গ্রহণ করুন এবং Read access token তৈরি করুন। Token এই ডিভাইসে Android Keystore দিয়ে encrypted থাকবে।"
-            setPadding(36, 8, 36, 8); setTextColor(Color.DKGRAY)
+            text = "মডেলটি একটি পাবলিক কমিউনিটি মিরর থেকে ডাউনলোড হবে (প্রায় ৫৫৫ MB)। Hugging Face Token লাগবে না। এটি Google-এর Gemma মডেল; ব্যবহারের আগে Gemma Terms মানতে হবে। ডাউনলোড শেষে SHA-256 যাচাই করা হবে।"
+            setTextColor(Color.DKGRAY); setPadding(20, 12, 20, 8)
         }
-        val box = LinearLayout(this).apply {
+        val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(message); addView(field)
+            addView(message); addView(consent)
         }
         AlertDialog.Builder(this)
-            .setTitle("Hugging Face access")
-            .setView(box)
-            .setPositiveButton("Save & Download") { _, _ ->
-                val token = field.text.toString().trim()
-                if (!token.startsWith("hf_") || token.length < 20) {
-                    state.text = "সঠিক Hugging Face read token দিন"
-                } else {
-                    hfToken = token
-                    TokenVault.save(this, token)
-                    startModelDownload(token)
+            .setTitle("Gemma মডেল ডাউনলোড")
+            .setView(panel)
+            .setPositiveButton("Terms মেনে ডাউনলোড") { _, _ ->
+                if (!consent.isChecked) {
+                    state.text = "ডাউনলোডের আগে Gemma Terms-এ সম্মতি দিন"
+                    return@setPositiveButton
                 }
+                startModelDownload()
             }
-            .setNeutralButton("Open Gemma License") { _, _ ->
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://huggingface.co/litert-community/Gemma3-1B-IT")))
+            .setNeutralButton("Gemma Terms পড়ুন") { _, _ ->
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://ai.google.dev/gemma/terms")))
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton("বাতিল", null)
             .show()
     }
 
-    private fun startModelDownload(token: String) {
+    private fun startModelDownload() {
         if (downloadJob?.isActive == true) return
-        downloadButton.text = "Cancel Download"
+        downloadButton.text = "ডাউনলোড থামান"
         downloadProgress.visibility = View.VISIBLE
-        downloadProgress.progress = 0
-        state.text = "Connecting to Hugging Face…"
         downloadJob = lifecycleScope.launch(Dispatchers.IO) {
             try {
-                downloadModel(token)
+                downloadModel()
                 withContext(Dispatchers.Main) {
-                    downloadLabel.text = "Download complete • checking model…"
-                    state.text = "Model downloaded • initializing"
-                    updateDownloadButton()
+                    downloadLabel.text = "ডাউনলোড সম্পূর্ণ • SHA-256 যাচাই হয়েছে"
+                    state.text = "Gemma প্রস্তুত হচ্ছে…"
+                    downloadButton.text = "Gemma আবার ডাউনলোড"
                     loadModel()
                 }
             } catch (e: CancellationException) {
                 withContext(Dispatchers.Main) {
-                    downloadLabel.text = "Download paused. Press Download to resume."
-                    state.text = "Download paused"
-                    updateDownloadButton()
+                    downloadLabel.text = "ডাউনলোড থেমেছে; আবার চাপলে Resume হবে"
+                    downloadButton.text = "ডাউনলোড আবার শুরু করুন"
                 }
                 throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    downloadLabel.text = "Download failed: ${e.message}"
-                    state.text = if (e.message?.contains("401") == true || e.message?.contains("403") == true)
-                        "Access denied • accept Gemma license / check token" else "Download error"
-                    updateDownloadButton()
+                    downloadLabel.text = "ডাউনলোড ব্যর্থ: \${e.message}"
+                    state.text = "Download error"
+                    downloadButton.text = "আবার চেষ্টা করুন"
                 }
             } finally {
                 activeConnection = null
@@ -241,31 +245,29 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private suspend fun downloadModel(token: String) {
+    private suspend fun downloadModel() {
         val partial = File(filesDir, "$modelName.part")
         val existing = if (partial.exists()) partial.length() else 0L
         val connection = (URL(modelUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 30_000
-            readTimeout = 60_000
+            connectTimeout = 30000
+            readTimeout = 60000
             instanceFollowRedirects = true
-            setRequestProperty("Authorization", "Bearer $token")
             setRequestProperty("Accept", "application/octet-stream")
-            setRequestProperty("User-Agent", "GemmaAIAvatar/1.1 Android")
+            setRequestProperty("User-Agent", "GemmaAIAvatar/2.0 Android")
             if (existing > 0) setRequestProperty("Range", "bytes=$existing-")
         }
         activeConnection = connection
         try {
             val code = connection.responseCode
-            if (code == 401 || code == 403) error("HTTP $code: Hugging Face access denied. Accept Gemma terms and use a read token.")
-            if (code !in listOf(200, 206)) error("HTTP $code from Hugging Face")
+            if (code !in listOf(200, 206)) error("HTTP $code; ইন্টারনেট বা মডেল সার্ভার পরীক্ষা করুন")
             val append = code == 206 && existing > 0
             if (!append && partial.exists()) partial.delete()
             val total = if (append) existing + connection.contentLengthLong else connection.contentLengthLong
             val type = connection.contentType.orEmpty()
-            if (type.contains("text/html", ignoreCase = true)) error("Hugging Face returned a web page, not model data. Check access token.")
+            if (type.contains("text/html", true)) error("মডেল ফাইলের বদলে ওয়েব পেজ এসেছে")
             var downloaded = if (append) existing else 0L
             connection.inputStream.use { input ->
-                java.io.FileOutputStream(partial, append).use { output ->
+                FileOutputStream(partial, append).use { output ->
                     val buffer = ByteArray(1024 * 1024)
                     while (true) {
                         coroutineContext.ensureActive()
@@ -273,23 +275,29 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         if (n < 0) break
                         output.write(buffer, 0, n)
                         downloaded += n
-                        if (total > 0) {
-                            val percent = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
-                            withContext(Dispatchers.Main) {
-                                downloadProgress.progress = percent
-                                downloadLabel.text = "Downloading Gemma 3 1B • $percent% • ${downloaded / (1024 * 1024)} MB / ${total / (1024 * 1024)} MB"
-                            }
-                        } else {
-                            withContext(Dispatchers.Main) {
-                                downloadLabel.text = "Downloaded ${downloaded / (1024 * 1024)} MB"
-                            }
+                        val percent = if (total > 0) ((downloaded * 100) / total).toInt().coerceIn(0, 100) else 0
+                        withContext(Dispatchers.Main) {
+                            downloadProgress.progress = percent
+                            downloadLabel.text = "Gemma ডাউনলোড: $percent% • \${downloaded / 1048576} MB"
                         }
                     }
                 }
             }
-            if (partial.length() < 500_000_000L) error("Downloaded model is incomplete; expected approximately 584 MB. Resume the download.")
+            if (partial.length() < 500_000_000L) error("ফাইল অসম্পূর্ণ; আবার Download চাপুন")
+            val digest = MessageDigest.getInstance("SHA-256")
+            partial.inputStream().buffered().use { input ->
+                val buffer = ByteArray(1024 * 1024)
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    digest.update(buffer, 0, n)
+                }
+            }
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            if (!hash.equals(expectedSha256, true)) error("SHA-256 মিলেনি; নিরাপত্তার জন্য মডেল বাতিল করা হয়েছে")
             if (modelFile.exists()) modelFile.delete()
-            if (!partial.renameTo(modelFile)) error("Could not finalize model file")
+            if (!partial.renameTo(modelFile)) error("মডেল ফাইল সংরক্ষণ করা যায়নি")
             withContext(Dispatchers.Main) { downloadProgress.progress = 100 }
         } finally {
             connection.disconnect()
@@ -298,24 +306,28 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun loadModel() {
-        val file = modelFile
-        if (!file.exists() || file.length() < 100_000_000L) {
-            state.text = "Model missing or incomplete"; return
+        if (!modelFile.exists() || modelFile.length() < 500_000_000L) {
+            state.text = "মডেল ডাউনলোড করা হয়নি"; return
         }
-        state.text = "Loading Gemma model…"
+        state.text = "Gemma মডেল লোড হচ্ছে…"
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val newEngine = Engine(EngineConfig(modelPath = file.absolutePath))
-                newEngine.initialize()
-                val newConversation = newEngine.createConversation()
+                val options = LlmInference.LlmInferenceOptions.builder()
+                    .setModelPath(modelFile.absolutePath)
+                    .setMaxTokens(512)
+                    .build()
+                val instance = LlmInference.createFromOptions(this@MainActivity, options)
                 withContext(Dispatchers.Main) {
-                    conversation?.close(); engine?.close()
-                    engine = newEngine; conversation = newConversation
-                    state.text = "Gemma 3 1B ready • Offline"
-                    log.append("\n\n[Gemma প্রস্তুত। এখন ইন্টারনেট ছাড়াই চ্যাট করতে পারবেন।]")
+                    llm?.close()
+                    llm = instance
+                    state.text = "Gemma 3 1B প্রস্তুত • Offline"
+                    log.append("\n\nমীরা এখন অফলাইনে কথা বলতে প্রস্তুত।")
+                    downloadButton.text = "Gemma মডেল প্রস্তুত"
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { state.text = "Model load failed: ${e.message}" }
+                withContext(Dispatchers.Main) {
+                    state.text = "মডেল লোড হয়নি: \${e.message} • ফোনের RAM/সাপোর্ট পরীক্ষা করুন"
+                }
             }
         }
     }
@@ -324,45 +336,59 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val question = prompt.text.toString().trim()
         if (question.isEmpty()) return
         prompt.setText("")
-        log.append("\n\nYou: $question\nGemma: ")
-        val active = conversation
+        log.append("\n\nআপনি: $question\nমীরা: ")
+        val active = llm
         if (active == null) {
-            log.append("আগে Gemma 3 1B মডেল ডাউনলোড বা নির্বাচন করুন।")
+            log.append("আগে Gemma মডেল ডাউনলোড করুন।")
             return
         }
-        state.text = "Thinking…"
+        state.text = "মীরা ভাবছে…"
         lifecycleScope.launch {
             try {
                 val answer = withContext(Dispatchers.IO) {
-                    val output = StringBuilder()
-                    active.sendMessageAsync(question).collect { output.append(it.toString()) }
-                    output.toString()
+                    active.generateResponse("তুমি মীরা, বন্ধুসুলভ বাংলা ভাষাভাষী ভার্চুয়াল AI সঙ্গী। স্বাভাবিক, সংক্ষিপ্ত ও সহানুভূতিশীলভাবে উত্তর দাও। ব্যবহারকারীর আবেগকে সম্মান করো।\\nব্যবহারকারী: $question")
                 }
                 log.append(answer)
+                setExpression(answer)
                 state.text = "Ready • Offline"
                 speak(answer)
             } catch (e: Exception) {
-                log.append("\n[Inference error: ${e.message}]")
-                state.text = "Inference error"
+                log.append("\n[AI error: \${e.message}]")
+                state.text = "AI inference error"
             }
         }
     }
 
-    private fun voiceInput() {
-        if (recognizer == null) { state.text = "Speech recognition unavailable"; return }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 9); return
+    private fun setExpression(text: String) {
+        val lower = text.lowercase()
+        avatar.expression = when {
+            listOf("দুঃখ", "কষ্ট", "খারাপ লাগ", "সমবেদনা", "sorry", "sad").any { lower.contains(it) } -> AvatarView.Expression.SAD
+            listOf("হা হা", "মজার", "খুশি", "দারুণ", "চমৎকার", "আনন্দ", "হাসি", "great", "happy").any { lower.contains(it) } -> AvatarView.Expression.HAPPY
+            listOf("অবাক", "সত্যি?", "বাহ!", "wow").any { lower.contains(it) } -> AvatarView.Expression.SURPRISED
+            else -> AvatarView.Expression.NEUTRAL
         }
+    }
+
+    private fun voiceInput() {
+        if (recognizer == null) { state.text = "Speech recognition পাওয়া যায়নি"; return }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            micPermission.launch(Manifest.permission.RECORD_AUDIO); return
+        }
+        startVoiceRecognition()
+    }
+
+    private fun startVoiceRecognition() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "bn-BD")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         }
         recognizer?.setRecognitionListener(object : android.speech.RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) { state.text = "Listening…" }
+            override fun onReadyForSpeech(params: Bundle?) { state.text = "শুনছি…" }
             override fun onResults(results: Bundle?) {
                 val words = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (words != null) prompt.setText(words)
-                state.text = "Voice captured"
+                if (words != null) { prompt.setText(words); sendMessage() }
+                state.text = "কথা বুঝেছি"
             }
             override fun onError(error: Int) { state.text = "Voice error: $error" }
             override fun onBeginningOfSpeech() {}
@@ -378,12 +404,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun speak(text: String) {
         if (text.isBlank()) return
         avatar.talking = true
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "gemma_reply")
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "mira_reply")
     }
 
     override fun onInit(statusCode: Int) {
         if (statusCode == TextToSpeech.SUCCESS) {
-            tts?.language = Locale("bn", "BD")
+            val result = tts?.setLanguage(Locale("bn", "BD"))
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                state.text = "ফোনে বাংলা TTS voice নেই; TTS settings থেকে বাংলা voice ইনস্টল করুন"
+            }
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) { runOnUiThread { avatar.talking = true } }
                 override fun onDone(utteranceId: String?) { runOnUiThread { avatar.talking = false } }
@@ -393,80 +422,170 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun toggleCamera() {
+        if (previewView.visibility == View.VISIBLE) {
+            ProcessCameraProvider.getInstance(this).get().unbindAll()
+            previewView.visibility = View.GONE
+            cameraButton.text = "📷 ক্যামেরা চালু"
+            avatar.userSmiling = false
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        } else startCamera()
+    }
+
+    private fun startCamera() {
+        previewView.visibility = View.VISIBLE
+        cameraButton.text = "ক্যামেরা বন্ধ করুন"
+        val future = ProcessCameraProvider.getInstance(this)
+        future.addListener({
+            try {
+                val provider = future.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                analysis.setAnalyzer(cameraExecutor) { proxy ->
+                    val mediaImage = proxy.image
+                    if (mediaImage == null) {
+                        proxy.close()
+                    } else {
+                        val image = InputImage.fromMediaImage(mediaImage, proxy.imageInfo.rotationDegrees)
+                        faceDetector?.process(image)
+                            ?.addOnSuccessListener { faces ->
+                                val face = faces.firstOrNull()
+                                val smile = face?.smilingProbability ?: 0f
+                                runOnUiThread {
+                                    avatar.userSmiling = smile > 0.65f
+                                    if (face != null) state.text = if (smile > 0.65f) "আপনাকে হাসিখুশি দেখাচ্ছে 😊" else "ক্যামেরায় আপনাকে দেখছি"
+                                }
+                            }
+                            ?.addOnCompleteListener { proxy.close() }
+                            ?: proxy.close()
+                    }
+                }
+                provider.unbindAll()
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis)
+            } catch (e: Exception) {
+                state.text = "ক্যামেরা চালু হয়নি: \${e.message}"
+            }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
     override fun onDestroy() {
         downloadJob?.cancel()
         activeConnection?.disconnect()
         recognizer?.destroy()
+        faceDetector?.close()
+        cameraExecutor.shutdown()
         tts?.stop(); tts?.shutdown()
-        conversation?.close(); engine?.close()
+        llm?.close()
         super.onDestroy()
     }
 }
 
-private object TokenVault {
-    private const val alias = "gemma_hf_token_aes"
-    private const val prefs = "secure_hf"
-    private const val keyName = "token"
-
-    private fun key(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val existing = store.getKey(alias, null) as? SecretKey
-        if (existing != null) return existing
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        generator.init(KeyGenParameterSpec.Builder(alias,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setRandomizedEncryptionRequired(true).build())
-        return generator.generateKey()
-    }
-
-    fun save(context: android.content.Context, token: String) {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        val encrypted = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
-        val encoded = Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
-        context.getSharedPreferences(prefs, 0).edit().putString(keyName, encoded).apply()
-    }
-
-    fun read(context: android.content.Context): String? {
-        return try {
-            val encoded = context.getSharedPreferences(prefs, 0).getString(keyName, null) ?: return null
-            val combined = Base64.decode(encoded, Base64.NO_WRAP)
-            val iv = combined.copyOfRange(0, 12)
-            val encrypted = combined.copyOfRange(12, combined.size)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-            String(cipher.doFinal(encrypted), Charsets.UTF_8)
-        } catch (_: Exception) { null }
-    }
-}
-
 class AvatarView(context: android.content.Context) : View(context) {
-    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    enum class Expression { NEUTRAL, HAPPY, SAD, SURPRISED }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     var talking = false
         set(value) { field = value; invalidate() }
-    private var frame = 0f
+    var expression = Expression.NEUTRAL
+        set(value) { field = value; invalidate() }
+    var userSmiling = false
+        set(value) { field = value; invalidate() }
+    private var tick = 0f
     private val animator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
-        duration = 300; repeatCount = android.animation.ValueAnimator.INFINITE
-        addUpdateListener { frame = if (talking) it.animatedValue as Float else 0f; invalidate() }
+        duration = 900; repeatCount = android.animation.ValueAnimator.INFINITE
+        addUpdateListener { tick = it.animatedValue as Float; invalidate() }
     }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); animator.start() }
     override fun onDetachedFromWindow() { animator.cancel(); super.onDetachedFromWindow() }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val cx = width / 2f; val cy = height / 2f
-        p.shader = LinearGradient(0f, 0f, width.toFloat(), height.toFloat(),
-            Color.rgb(28, 76, 119), Color.rgb(82, 43, 113), Shader.TileMode.CLAMP)
-        canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), 24f, 24f, p)
-        p.shader = null
-        p.color = Color.rgb(235, 190, 154); canvas.drawCircle(cx, cy, 70f, p)
-        p.color = Color.rgb(48, 31, 29); canvas.drawOval(cx-73, cy-82, cx+73, cy-18, p)
-        p.color = Color.WHITE; canvas.drawCircle(cx-24, cy-4, 8f, p); canvas.drawCircle(cx+24, cy-4, 8f, p)
-        p.color = Color.DKGRAY; canvas.drawCircle(cx-24, cy-4, 3.5f, p); canvas.drawCircle(cx+24, cy-4, 3.5f, p)
-        p.color = Color.rgb(145, 48, 63)
-        canvas.drawOval(cx-14, cy+29, cx+14, cy+34+frame*14, p)
-        p.color = Color.WHITE; p.textSize = 11f; p.textAlign = Paint.Align.CENTER
-        canvas.drawText("AI AVATAR", cx, height-10f, p)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val cx = w * 0.50f
+        val headY = h * 0.34f
+        val bob = if (talking) kotlin.math.sin(tick * Math.PI * 2).toFloat() * 3f else kotlin.math.sin(tick * Math.PI * 2).toFloat() * 1.5f
+        paint.shader = LinearGradient(0f, 0f, w, h, Color.rgb(25, 56, 98), Color.rgb(83, 35, 91), Shader.TileMode.CLAMP)
+        canvas.drawRoundRect(0f, 0f, w, h, 22f, 22f, paint)
+        paint.shader = null
+
+        // shoulders and torso
+        paint.color = Color.rgb(43, 75, 133)
+        canvas.drawRoundRect(cx - w * .31f, h * .65f, cx + w * .31f, h * 1.08f, 48f, 48f, paint)
+        // animated arms
+        val armSwing = kotlin.math.sin(tick * Math.PI * 2).toFloat() * if (talking) 16f else 5f
+        val armPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(235, 190, 160); strokeWidth = 15f; strokeCap = Paint.Cap.ROUND; style = Paint.Style.STROKE
+        }
+        canvas.drawLine(cx - w*.25f, h*.72f, cx - w*.39f, h*.86f + armSwing, armPaint)
+        canvas.drawLine(cx + w*.25f, h*.72f, cx + w*.39f, h*.86f - armSwing, armPaint)
+        paint.color = Color.rgb(235, 190, 160)
+        canvas.drawCircle(cx - w*.39f, h*.86f + armSwing, 9f, paint)
+        canvas.drawCircle(cx + w*.39f, h*.86f - armSwing, 9f, paint)
+
+        // neck and face
+        paint.color = Color.rgb(231, 183, 151)
+        canvas.drawRoundRect(cx-17f, headY+46f+bob, cx+17f, headY+82f+bob, 12f, 12f, paint)
+        canvas.drawOval(cx-65f, headY-76f+bob, cx+65f, headY+79f+bob, paint)
+        // long hair silhouette
+        paint.color = Color.rgb(43, 27, 35)
+        canvas.drawOval(cx-73f, headY-93f+bob, cx+73f, headY+67f+bob, paint)
+        paint.color = Color.rgb(231, 183, 151)
+        canvas.drawOval(cx-57f, headY-67f+bob, cx+57f, headY+72f+bob, paint)
+        // fringe
+        paint.color = Color.rgb(43, 27, 35)
+        val fringe = Path().apply {
+            moveTo(cx-58f, headY-37f+bob); quadTo(cx-48f, headY-105f+bob, cx+4f, headY-81f+bob)
+            quadTo(cx+46f, headY-104f+bob, cx+59f, headY-35f+bob)
+            quadTo(cx+15f, headY-57f+bob, cx-10f, headY-42f+bob)
+            close()
+        }
+        canvas.drawPath(fringe, paint)
+        // eyes
+        val eyeY = headY-4f+bob
+        paint.color = Color.WHITE
+        canvas.drawOval(cx-37f, eyeY-8f, cx-12f, eyeY+10f, paint)
+        canvas.drawOval(cx+12f, eyeY-8f, cx+37f, eyeY+10f, paint)
+        paint.color = Color.rgb(55, 36, 28)
+        canvas.drawCircle(cx-24f, eyeY+1f, 5f, paint)
+        canvas.drawCircle(cx+24f, eyeY+1f, 5f, paint)
+        // eyebrows and mouth react to conversation
+        paint.color = Color.rgb(63, 37, 34)
+        when (expression) {
+            Expression.SAD -> {
+                canvas.drawLine(cx-39f, eyeY-20f, cx-13f, eyeY-14f, paint)
+                canvas.drawLine(cx+13f, eyeY-14f, cx+39f, eyeY-20f, paint)
+            }
+            Expression.SURPRISED -> {
+                canvas.drawLine(cx-39f, eyeY-23f, cx-13f, eyeY-23f, paint)
+                canvas.drawLine(cx+13f, eyeY-23f, cx+39f, eyeY-23f, paint)
+            }
+            else -> {
+                canvas.drawLine(cx-39f, eyeY-17f, cx-13f, eyeY-17f, paint)
+                canvas.drawLine(cx+13f, eyeY-17f, cx+39f, eyeY-17f, paint)
+            }
+        }
+        paint.color = Color.rgb(159, 65, 80)
+        when (expression) {
+            Expression.HAPPY -> canvas.drawArc(cx-18f, headY+27f+bob, cx+18f, headY+48f+bob, 5f, 170f, false, paint.apply { style = Paint.Style.STROKE; strokeWidth = 4f })
+            Expression.SAD -> canvas.drawArc(cx-15f, headY+42f+bob, cx+15f, headY+57f+bob, 195f, 150f, false, paint.apply { style = Paint.Style.STROKE; strokeWidth = 4f })
+            Expression.SURPRISED -> canvas.drawOval(cx-8f, headY+31f+bob, cx+8f, headY+53f+bob, paint.apply { style = Paint.Style.FILL })
+            else -> canvas.drawOval(cx-10f, headY+37f+bob, cx+10f, headY+41f+(if (talking) 10f else 0f)+bob, paint.apply { style = Paint.Style.FILL })
+        }
+        if (userSmiling) {
+            paint.color = Color.rgb(135, 240, 190)
+            paint.textSize = 12f; paint.textAlign = Paint.Align.CENTER
+            canvas.drawText("তোমার হাসি দেখছি 😊", cx, h-9f, paint)
+        } else {
+            paint.color = Color.WHITE
+            paint.textSize = 11f; paint.textAlign = Paint.Align.CENTER
+            canvas.drawText(if (talking) "মীরা কথা বলছে…" else "MIRA • AI AVATAR", cx, h-9f, paint)
+        }
     }
 }
