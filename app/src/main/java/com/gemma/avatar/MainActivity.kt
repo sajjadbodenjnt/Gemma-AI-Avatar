@@ -265,7 +265,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             if (type.contains("text/html", ignoreCase = true)) error("Hugging Face returned a web page, not model data. Check access token.")
             var downloaded = if (append) existing else 0L
             connection.inputStream.use { input ->
-                partial.outputStream(append).use { output ->
+                java.io.FileOutputStream(partial, append).use { output ->
                     val buffer = ByteArray(1024 * 1024)
                     while (true) {
                         coroutineContext.ensureActive()
