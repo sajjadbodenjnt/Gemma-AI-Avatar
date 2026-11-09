@@ -287,7 +287,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     }
                 }
             }
-            if (partial.length() < 100_000_000L) error("Downloaded file is too small; incomplete or unauthorized response.")
+            if (partial.length() < 500_000_000L) error("Downloaded model is incomplete; expected approximately 584 MB. Resume the download.")
             if (modelFile.exists()) modelFile.delete()
             if (!partial.renameTo(modelFile)) error("Could not finalize model file")
             withContext(Dispatchers.Main) { downloadProgress.progress = 100 }
