@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 } ?: error("ফাইল খোলা যায়নি")
                 withContext(Dispatchers.Main) { loadModel() }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { state.text = "Model copy error: \${e.message}" }
+                withContext(Dispatchers.Main) { state.text = "Model copy error: ${e.message}" }
             }
         }
     }
@@ -235,7 +235,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    downloadLabel.text = "ডাউনলোড ব্যর্থ: \${e.message}"
+                    downloadLabel.text = "ডাউনলোড ব্যর্থ: ${e.message}"
                     state.text = "Download error"
                     downloadButton.text = "আবার চেষ্টা করুন"
                 }
@@ -278,7 +278,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         val percent = if (total > 0) ((downloaded * 100) / total).toInt().coerceIn(0, 100) else 0
                         withContext(Dispatchers.Main) {
                             downloadProgress.progress = percent
-                            downloadLabel.text = "Gemma ডাউনলোড: $percent% • \${downloaded / 1048576} MB"
+                            downloadLabel.text = "Gemma ডাউনলোড: $percent% • ${downloaded / 1048576} MB"
                         }
                     }
                 }
@@ -326,7 +326,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    state.text = "মডেল লোড হয়নি: \${e.message} • ফোনের RAM/সাপোর্ট পরীক্ষা করুন"
+                    state.text = "মডেল লোড হয়নি: ${e.message} • ফোনের RAM/সাপোর্ট পরীক্ষা করুন"
                 }
             }
         }
@@ -353,7 +353,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 state.text = "Ready • Offline"
                 speak(answer)
             } catch (e: Exception) {
-                log.append("\n[AI error: \${e.message}]")
+                log.append("\n[AI error: ${e.message}]")
                 state.text = "AI inference error"
             }
         }
@@ -470,7 +470,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 provider.unbindAll()
                 provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis)
             } catch (e: Exception) {
-                state.text = "ক্যামেরা চালু হয়নি: \${e.message}"
+                state.text = "ক্যামেরা চালু হয়নি: ${e.message}"
             }
         }, ContextCompat.getMainExecutor(this))
     }
