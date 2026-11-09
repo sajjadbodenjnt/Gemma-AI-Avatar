@@ -475,6 +475,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    override fun onPause() {
+        avatar.onPause()
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::avatar.isInitialized) avatar.onResume()
+    }
+
     override fun onDestroy() {
         downloadJob?.cancel()
         activeConnection?.disconnect()
