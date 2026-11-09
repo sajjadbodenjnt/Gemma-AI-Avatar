@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private lateinit var log: TextView
     private lateinit var state: TextView
     private lateinit var prompt: EditText
-    private lateinit var avatar: AvatarView
+    private lateinit var avatar: Mira3DView
     private lateinit var previewView: PreviewView
     private lateinit var downloadProgress: ProgressBar
     private lateinit var downloadLabel: TextView
@@ -118,7 +118,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             text = "AI offline model not installed"; textSize = 12f
             gravity = Gravity.CENTER; setTextColor(Color.rgb(115, 225, 185))
         }
-        avatar = AvatarView(this)
+        avatar = Mira3DView(this)
         previewView = PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             visibility = View.GONE
@@ -362,10 +362,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun setExpression(text: String) {
         val lower = text.lowercase()
         avatar.expression = when {
-            listOf("দুঃখ", "কষ্ট", "খারাপ লাগ", "সমবেদনা", "sorry", "sad").any { lower.contains(it) } -> AvatarView.Expression.SAD
-            listOf("হা হা", "মজার", "খুশি", "দারুণ", "চমৎকার", "আনন্দ", "হাসি", "great", "happy").any { lower.contains(it) } -> AvatarView.Expression.HAPPY
-            listOf("অবাক", "সত্যি?", "বাহ!", "wow").any { lower.contains(it) } -> AvatarView.Expression.SURPRISED
-            else -> AvatarView.Expression.NEUTRAL
+            listOf("দুঃখ", "কষ্ট", "খারাপ লাগ", "সমবেদনা", "sorry", "sad").any { lower.contains(it) } -> Mira3DView.Expression.SAD
+            listOf("হা হা", "মজার", "খুশি", "দারুণ", "চমৎকার", "আনন্দ", "হাসি", "great", "happy").any { lower.contains(it) } -> Mira3DView.Expression.HAPPY
+            listOf("অবাক", "সত্যি?", "বাহ!", "wow").any { lower.contains(it) } -> Mira3DView.Expression.SURPRISED
+            else -> Mira3DView.Expression.NEUTRAL
         }
     }
 
@@ -487,7 +487,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 }
 
-class AvatarView(context: android.content.Context) : View(context) {
+class Mira3DView(context: android.content.Context) : View(context) {
     enum class Expression { NEUTRAL, HAPPY, SAD, SURPRISED }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     var talking = false
