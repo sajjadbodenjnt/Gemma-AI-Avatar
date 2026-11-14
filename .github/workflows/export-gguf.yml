@@ -1,6 +1,10 @@
 name: Export AIBondhu GGUF
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "training/merge_lora.py"
+      - ".github/workflows/export-gguf.yml"
   workflow_run:
     workflows: ["Train Bengali Mini Model"]
     types: [completed]
