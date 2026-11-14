@@ -1,15 +1,14 @@
-# Android Starter
+# AIBondhu Mini Android
 
-এই ফোল্ডার Android Studio project. Java 17, Android SDK 35 এবং Gradle 8.9 ব্যবহার করে।
+বাংলা অফলাইন চ্যাট অ্যাপ। arm64-v8a ফোনে llama.cpp JNI ব্যবহার করে GGUF মডেল চালানোর জন্য তৈরি।
 
 ## Build
-Android Studio-তে `android/` folder open করে Gradle sync এবং `app:assembleDebug` চালান।
-GitHub Actions-এ Android Debug APK workflow চালালে APK artifact তৈরি হওয়ার কথা।
+GitHub Actions-এর **Android Debug APK** workflow llama.cpp checkout করে APK তৈরি করে। লোকাল build-এর আগে:
+`git clone --depth 1 https://github.com/ggml-org/llama.cpp.git app/src/main/cpp/llama.cpp`
+তারপর Android Studio-তে এই `android/` ফোল্ডার খুলে `app:assembleDebug` চালান।
 
-## বাস্তব offline inference যোগ করার পরের ধাপ
-- llama.cpp Android arm64 build যুক্ত করুন
-- Qwen base model-কে GGUF-এ convert/quantize করুন অথবা compatible GGUF base ব্যবহার করুন
-- LoRA adapter merge করে GGUF export করুন
-- model file app-private storage-এ রাখুন এবং JNI থেকে llama.cpp load করুন
+## মডেল ব্যবহার
+**Export AIBondhu GGUF** workflow থেকে `aibondhu-android-gguf-q4km` artifact ডাউনলোড করুন। ZIP extract করে `aibondhu-q4_k_m.gguf` ফোনে রাখুন। অ্যাপ খুলে **GGUF মডেল নির্বাচন করুন** চাপুন এবং ফাইলটি বেছে নিন। প্রথমবার কপি/লোড হতে সময় লাগবে; এরপর inference অফলাইনে হবে।
 
-বর্তমান UI build starter; এটি এখনও trained model চালায় না এবং avatar view placeholder।
+## সীমাবদ্ধতা
+এটি ছোট 0.5B experimental model; অল্প বাংলা ডেটায় fine-tune করা, তাই উত্তর ChatGPT-সমমান নয়। বাস্তব rigged 3D avatar এবং বাংলা offline speech এখনো যুক্ত নয়।
