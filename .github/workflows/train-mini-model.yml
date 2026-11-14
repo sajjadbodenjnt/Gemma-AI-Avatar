@@ -6,6 +6,10 @@ on:
         description: "Training epochs (start with 1)"
         required: true
         default: "1"
+  push:
+    paths:
+      - "training/**"
+      - ".github/workflows/train-mini-model.yml"
 jobs:
   train:
     runs-on: ubuntu-latest
@@ -23,7 +27,7 @@ jobs:
           pip install -r training/requirements.txt
       - name: Fine-tune Bengali LoRA adapter
         env:
-          EPOCHS: ${{ inputs.epochs }}
+          EPOCHS: ${{ inputs.epochs || '1' }}
         run: python training/train_lora.py
       - name: Upload adapter artifact
         uses: actions/upload-artifact@v4
