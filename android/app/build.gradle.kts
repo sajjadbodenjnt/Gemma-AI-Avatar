@@ -10,8 +10,8 @@ android {
   applicationId = "com.aibondhu.mini"
   minSdk = 26
   targetSdk = 35
-  versionCode = 3
-  versionName = "0.3.0"
+  versionCode = 4
+  versionName = "0.4.0"
   ndk { abiFilters += listOf("arm64-v8a") }
   externalNativeBuild { cmake { cppFlags += listOf("-std=c++17", "-O3") } }
  }
@@ -26,4 +26,4 @@ dependencies {
  implementation("androidx.activity:activity-ktx:1.9.3")
 }
 
-// Rebuild trigger: include native llama.cpp checkout in CI.
+// Build v0.4.0 after preparing the standalone Sophia GLB artifact.
