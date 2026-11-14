@@ -1,31 +1,22 @@
-# AIBondhu Mini — Bengali Offline AI + 3D Avatar
+# AIBondhu Mini — Bengali Offline AI
 
-A practical starter project for an Android assistant with:
-- a small Bengali-tuned language adapter (LoRA fine-tune of Qwen2.5-0.5B-Instruct),
-- Android inference via llama.cpp after GGUF export,
-- a rigged GLB/GLTF human avatar with facial animation hooks.
+Android prototype for offline Bengali chat using Qwen2.5-0.5B-Instruct fine-tuned with a small Bengali LoRA dataset.
 
-> **Honest status:** this repository contains training/build scaffolding, not a trained model or finished photorealistic avatar yet. GitHub stores code and can run workflows; it does not magically train a model without compute. The training workflow below is manual and uses a GitHub-hosted CPU runner, so it may be slow or hit resource limits. No model weights are committed.
+## Model pipeline
+1. `Train Bengali Mini Model` creates the `aibondhu-lora-adapter` Actions artifact.
+2. `Export AIBondhu GGUF` merges the adapter into Qwen and converts/quantizes it to `aibondhu-q4_k_m.gguf`.
+3. Download that GGUF artifact and select it inside the Android app. The app copies it into private storage and loads it through llama.cpp JNI.
 
-## Project layout
-- `training/`: Bengali instruction dataset and LoRA fine-tuning script
-- `.github/workflows/train-mini-model.yml`: manual training workflow; saves adapter as an Actions artifact
-- `android/`: Android Studio starter app
-- `docs/AVATAR_ASSETS.md`: requirements for a true animated human (not a photo)
+GGUF export is a separate CPU-heavy job and may take a long time or fail if the runner runs out of memory. The model is not bundled into the APK because it is much larger than the app itself.
 
-## Train the mini model on GitHub
-1. Open **Actions → Train Bengali Mini Model → Run workflow**.
-2. The workflow fine-tunes `Qwen/Qwen2.5-0.5B-Instruct` using the small sample dataset.
-3. Download the `aibondhu-lora-adapter` artifact from the completed workflow.
-4. Expand the dataset with licensed, high-quality Bengali conversations before serious use.
+## Build Android APK
+GitHub Actions clones llama.cpp before compiling. For a local Android Studio build, clone llama.cpp into `android/app/src/main/cpp/llama.cpp`, then open `android/` and build `app:assembleDebug`. Target ABI is arm64-v8a.
 
-This is **LoRA fine-tuning**, not training a foundation model from zero. For better quality and speed, use a GPU runner (self-hosted) and more training data. The default hosted CPU runner is a prototype path, not a guaranteed successful training environment.
-
-## Android app
-Open the `android/` folder in Android Studio. It is a starter UI with a model status screen and JNI integration placeholder. Real on-device inference requires building llama.cpp for Android arm64 and placing the converted/quantized GGUF model in app-private storage. The app deliberately does not fake AI responses.
-
-## 3D human avatar
-See [docs/AVATAR_ASSETS.md](docs/AVATAR_ASSETS.md). A realistic human requires a licensed rigged GLB/GLTF character, skeleton, facial blendshapes and animation clips. No static picture is presented as a working 3D human.
+## Current limitations
+- This is a 0.5B prototype, not a ChatGPT-level model. The training dataset is tiny, so Bengali answer quality will be limited.
+- First-time GGUF download/import requires internet or a file already on the phone. Inference itself is designed to run offline.
+- The current app does not yet contain a rigged 3D human asset. A real animated human requires a licensed rigged GLB/GLTF model and renderer.
+- Bengali speech input/output is not yet integrated.
 
 ## License
-Code in this repository: MIT. Base model, datasets and avatar assets retain their own licenses; review them before redistribution.
+Project code is MIT. Qwen base model, training data and avatar assets retain their own licenses.
