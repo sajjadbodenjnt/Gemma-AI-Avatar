@@ -10,8 +10,37 @@ permissions:
   actions: read
 
 jobs:
-  build:
+  prepare-sophia-glb:
     if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Blender
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils
+          curl --fail --location --retry 3 https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz --output /tmp/blender.tar.xz
+          tar -xJf /tmp/blender.tar.xz -C /tmp
+      - name: Download Sophia source and export standalone GLB
+        run: |
+          BLENDER=/tmp/blender-4.2.3-linux-x64/blender
+          mkdir -p build/sophia
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/s0ck3t/VideoIntoBlenderModel/main/assets/rigs/renderpeople_sophia.fbx --output /tmp/renderpeople_sophia.fbx
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/s0ck3t/VideoIntoBlenderModel/main/assets/rigs/renderpeople_sophia.png --output /tmp/renderpeople_sophia.png
+          "$BLENDER" --background --python android/tools/export_avatar.py -- --input /tmp/renderpeople_sophia.fbx --texture /tmp/renderpeople_sophia.png --output "$GITHUB_WORKSPACE/build/sophia/sophia.glb"
+          test -s build/sophia/sophia.glb
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/s0ck3t/VideoIntoBlenderModel/main/assets/LICENCES.md --output build/sophia/AVATAR_SOURCE_LICENSES.md
+          ls -lh build/sophia/sophia.glb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sophia-3D-GLB
+          path: build/sophia/
+          if-no-files-found: error
+          retention-days: 14
+
+  build-android-app:
+    needs: prepare-sophia-glb
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -24,27 +53,21 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
-      - name: Verify model asset
+      - name: Download the completed Sophia GLB
+        uses: actions/download-artifact@v4
+        with:
+          name: Sophia-3D-GLB
+          path: android/app/src/main/assets
+      - name: Verify model and Sophia files before Android build
         run: |
           test -s android/app/src/main/assets/aibondhu-q4_k_m.gguf
-          ls -lh android/app/src/main/assets/aibondhu-q4_k_m.gguf
-      - name: Prepare offline photorealistic Sophia avatar
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xz-utils
-          curl --fail --location --retry 3 https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz --output /tmp/blender.tar.xz
-          tar -xJf /tmp/blender.tar.xz -C /tmp
-          BLENDER=/tmp/blender-4.2.3-linux-x64/blender
-          mkdir -p android/app/src/main/assets
-          curl --fail --location --retry 3 https://raw.githubusercontent.com/s0ck3t/VideoIntoBlenderModel/main/assets/rigs/renderpeople_sophia.fbx --output /tmp/renderpeople_sophia.fbx
-          curl --fail --location --retry 3 https://raw.githubusercontent.com/s0ck3t/VideoIntoBlenderModel/main/assets/rigs/renderpeople_sophia.png --output /tmp/renderpeople_sophia.png
-          "$BLENDER" --background --python android/tools/export_avatar.py -- --input /tmp/renderpeople_sophia.fbx --texture /tmp/renderpeople_sophia.png --output "$GITHUB_WORKSPACE/android/app/src/main/assets/sophia.glb"
           test -s android/app/src/main/assets/sophia.glb
-          curl --fail --location --retry 3 https://raw.githubusercontent.com/s0ck3t/VideoIntoBlenderModel/main/assets/LICENCES.md --output android/app/src/main/assets/AVATAR_SOURCE_LICENSES.md
+          ls -lh android/app/src/main/assets/aibondhu-q4_k_m.gguf android/app/src/main/assets/sophia.glb
+      - name: Bundle 3D avatar renderer
+        run: |
           npm install --prefix android/app/src/main --no-save --no-audit --no-fund three@0.170.0 esbuild@0.24.2
           android/app/src/main/node_modules/.bin/esbuild android/app/src/main/avatar-src.js --bundle --format=iife --target=es2020 --outfile=android/app/src/main/assets/avatar.bundle.js
           test -s android/app/src/main/assets/avatar.bundle.js
-          ls -lh android/app/src/main/assets/sophia.glb android/app/src/main/assets/avatar.bundle.js
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -62,7 +85,7 @@ jobs:
       - name: Build model-included ARM64 APK
         working-directory: android
         run: gradle assembleDebug --stacktrace
-      - name: Verify APK contains model and avatar
+      - name: Verify APK contains model and Sophia 3D avatar
         run: |
           APK=android/app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
