@@ -32,7 +32,7 @@ jobs:
       - name: Install conversion dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install torch transformers peft accelerate sentencepiece safetensors
+          pip install torch 'transformers==4.51.3' peft accelerate sentencepiece safetensors
       - name: Merge LoRA into base model
         run: python training/merge_lora.py
       - name: Get llama.cpp converter and quantizer
