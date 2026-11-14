@@ -17,6 +17,6 @@ model = AutoPeftModelForCausalLM.from_pretrained(
 )
 model = model.merge_and_unload()
 model.save_pretrained(str(merged_dir), safe_serialization=True, max_shard_size="2GB")
-tokenizer = AutoTokenizer.from_pretrained(str(adapter_dir), use_fast=True)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct", use_fast=True)
 tokenizer.save_pretrained(str(merged_dir))
 print(f"Merged model saved to {merged_dir}")
