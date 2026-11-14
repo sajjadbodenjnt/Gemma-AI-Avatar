@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch llama.cpp native engine
+        run: git clone --depth 1 https://github.com/ggml-org/llama.cpp.git android/app/src/main/cpp/llama.cpp
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -19,7 +21,7 @@ jobs:
           gradle-version: "8.9"
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 cmake;3.22.1 ndk;27.2.12479018"
       - name: Build debug APK
         working-directory: android
         run: gradle assembleDebug
