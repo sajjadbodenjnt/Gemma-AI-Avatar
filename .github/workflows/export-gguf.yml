@@ -5,6 +5,7 @@ on:
     paths:
       - "training/merge_lora.py"
       - ".github/workflows/export-gguf.yml"
+      - "android/**"
   workflow_run:
     workflows: ["Train Bengali Mini Model"]
     types: [completed]
