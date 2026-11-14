@@ -55,6 +55,10 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: "platform-tools platforms;android-35 build-tools;35.0.0 cmake;3.22.1 ndk;27.2.12479018"
+      - name: Fetch llama.cpp native inference engine
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git android/app/src/main/cpp/llama.cpp
+          test -s android/app/src/main/cpp/llama.cpp/CMakeLists.txt
       - name: Build model-included ARM64 APK
         working-directory: android
         run: gradle assembleDebug --stacktrace
