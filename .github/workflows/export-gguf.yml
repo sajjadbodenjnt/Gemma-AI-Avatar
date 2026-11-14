@@ -1,0 +1,52 @@
+name: Export AIBondhu GGUF
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Train Bengali Mini Model"]
+    types: [completed]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  export:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download trained LoRA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: aibondhu-lora-adapter
+          path: output/aibondhu-lora
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id || github.run_id }}
+      - name: Install conversion dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch transformers peft accelerate sentencepiece safetensors
+      - name: Merge LoRA into base model
+        run: python training/merge_lora.py
+      - name: Get llama.cpp converter and quantizer
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          python -m pip install -r llama.cpp/requirements/requirements-convert_hf_to_gguf.txt
+          cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build llama.cpp/build --target llama-quantize -j2
+      - name: Convert merged model to GGUF
+        run: |
+          python llama.cpp/convert_hf_to_gguf.py output/aibondhu-merged --outfile output/aibondhu-f16.gguf --outtype f16
+      - name: Quantize for Android
+        run: |
+          mkdir -p output/gguf
+          llama.cpp/build/bin/llama-quantize output/aibondhu-f16.gguf output/gguf/aibondhu-q4_k_m.gguf Q4_K_M
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aibondhu-android-gguf-q4km
+          path: output/gguf/aibondhu-q4_k_m.gguf
+          if-no-files-found: error
+          retention-days: 14
