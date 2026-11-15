@@ -51,22 +51,51 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     if (targets[name] !== undefined) targets[name] = Math.max(0, Math.min(1, Number(weight) || 0));
   };
   new GLTFLoader().load('./sophia.glb', (gltf) => {
-    const avatar = gltf.scene; scene.add(avatar);
-    const box = new THREE.Box3().setFromObject(avatar), size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 0) avatar.scale.setScalar(2.0 / maxDim);
-    avatar.position.sub(center.multiplyScalar(2.0 / maxDim));
-    const scaledBox = new THREE.Box3().setFromObject(avatar), scaledCenter = scaledBox.getCenter(new THREE.Vector3());
-    avatar.position.y -= scaledBox.min.y;
-    camera.position.set(0, Math.max(1.0, size.y / maxDim), 3.1); camera.lookAt(0, scaledCenter.y + 0.05, 0);
-    avatar.traverse(obj => { if (obj.isMesh && obj.morphTargetInfluences) morphMeshes.push(obj); });
+    const avatar = gltf.scene;
+    avatar.traverse(obj => {
+      if (obj.isMesh) {
+        obj.frustumCulled = false;
+        if (obj.morphTargetInfluences) morphMeshes.push(obj);
+      }
+    });
+    scene.add(avatar);
+    let bounds = new THREE.Box3().setFromObject(avatar);
+    const originalSize = bounds.getSize(new THREE.Vector3());
+    const maxDim = Math.max(originalSize.x, originalSize.y, originalSize.z);
+    if (!Number.isFinite(maxDim) || maxDim <= 0) {
+      status.textContent = '3D মডেলের মাপ সঠিক নয়';
+      return;
+    }
+    avatar.scale.setScalar(1.85 / maxDim);
+    bounds = new THREE.Box3().setFromObject(avatar);
+    const center = bounds.getCenter(new THREE.Vector3());
+    avatar.position.x -= center.x;
+    avatar.position.y -= center.y;
+    avatar.position.z -= center.z;
+    bounds = new THREE.Box3().setFromObject(avatar);
+    avatar.position.y -= bounds.min.y;
+    bounds = new THREE.Box3().setFromObject(avatar);
+    const fittedSize = bounds.getSize(new THREE.Vector3());
+    const target = bounds.getCenter(new THREE.Vector3());
+    const halfFov = THREE.MathUtils.degToRad(camera.fov * 0.5);
+    const fitHeight = (fittedSize.y * 0.5) / Math.tan(halfFov);
+    const fitWidth = (fittedSize.x * 0.5) / (Math.tan(halfFov) * camera.aspect);
+    const distance = Math.max(fitHeight, fitWidth, fittedSize.z) * 1.45;
+    camera.near = 0.01;
+    camera.far = Math.max(100, distance * 10);
+    camera.position.set(0, target.y, distance);
+    camera.lookAt(0, target.y, 0);
+    camera.updateProjectionMatrix();
     if (gltf.animations?.length) {
       mixer = new THREE.AnimationMixer(avatar);
       const idle = gltf.animations.find(a => /idle|stand|breath/i.test(a.name)) || gltf.animations[0];
       mixer.clipAction(idle).play();
     }
-    status.textContent = '3D মানব অবতার প্রস্তুত';
-  }, undefined, error => { console.error(error); status.textContent = '3D মডেল লোড হয়নি'; });
+    status.textContent = '3D মানব অবতার লোড হয়েছে';
+  }, undefined, error => {
+    console.error('Sophia GLB load failed:', error);
+    status.textContent = '3D মডেল লোড হয়নি — GLB ফাইল পরীক্ষা করুন';
+  });
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min(0.05, (now - (last || now)) / 1000); last = now;
