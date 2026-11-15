@@ -1,0 +1,47 @@
+name: Train AIBondhu Bangla From Scratch
+on:
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: Training steps
+        required: true
+        default: "100000"
+      batch:
+        description: Per-device batch size
+        required: true
+        default: "8"
+permissions:
+  contents: read
+jobs:
+  train:
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 10080
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify CUDA GPU
+        run: |
+          nvidia-smi
+          python -m pip install torch
+          python -c "import torch; assert torch.cuda.is_available()"
+      - name: Install dependencies
+        run: pip install sentencepiece numpy
+      - name: Check Bengali corpus
+        run: |
+          test -s training_scratch/data/bengali_corpus.txt
+          test $(wc -c < training_scratch/data/bengali_corpus.txt) -ge 10000000
+      - name: Train tokenizer
+        run: python training_scratch/train_tokenizer.py
+      - name: Train from random initialization
+        run: python training_scratch/train.py --steps "${{ inputs.steps }}" --batch "${{ inputs.batch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AIBondhu-Bangla-From-Scratch-Checkpoint
+          path: |
+            output/bangla-from-scratch/
+            output/bangla_tokenizer.model
+            output/bangla_tokenizer.vocab
+          if-no-files-found: error
+          retention-days: 30
