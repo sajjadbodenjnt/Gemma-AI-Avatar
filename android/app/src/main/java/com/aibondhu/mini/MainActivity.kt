@@ -16,6 +16,9 @@ import androidx.appcompat.app.AppCompatActivity
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.zip.ZipInputStream
+import android.provider.OpenableColumns
+import java.io.RandomAccessFile
 
 class MainActivity : AppCompatActivity() {
     private external fun nativeLoadModel(path: String): Boolean
@@ -53,8 +56,14 @@ class MainActivity : AppCompatActivity() {
         fun label(value: String, size: Float, color: Int) = TextView(this).apply {
             text = value; textSize = size; setTextColor(color); setPadding(0, 7, 0, 7)
         }
-        root.addView(label("AIBondhu", 27f, 0xFFF4F8FF.toInt()))
-        root.addView(label("বাংলা অফলাইন AI · Qwen 0.5B Bengali LoRA", 13f, 0xFF55D6FF.toInt()))
+        val brand = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+        val logo = ImageView(this).apply { setImageResource(R.drawable.aibondhu_logo); contentDescription = "AIBondhu logo"; scaleType = ImageView.ScaleType.FIT_CENTER }
+        brand.addView(logo, LinearLayout.LayoutParams(dp(52), dp(52)))
+        val brandText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        brandText.addView(label("AIBondhu", 27f, 0xFFF4F8FF.toInt()))
+        brandText.addView(label("বাংলা অফলাইন AI · Qwen Bengali LoRA", 13f, 0xFF55D6FF.toInt()))
+        brand.addView(brandText)
+        root.addView(brand)
         avatar = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -82,7 +91,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        root.addView(avatar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(220)))
+        root.addView(avatar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(330)))
         status = label("অফলাইন মডেল লোড হচ্ছে…", 12f, 0xFF55D6FF.toInt())
         root.addView(status)
         chat = label("AIBondhu: স্বাগতম! মডেল প্রস্তুত হলে বাংলায় কথা বলতে পারবেন।", 15f, 0xFFF4F8FF.toInt())
@@ -142,47 +151,69 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadBundledModel() {
-        status.text = "অ্যাপের সঙ্গে থাকা বাংলা AI মডেল কপি হচ্ছে…"
+        status.text = "অফলাইন AI মডেল খোঁজা হচ্ছে…"
         worker.execute {
             try {
                 val target = File(filesDir, "aibondhu-q4_k_m.gguf")
-                if (!target.exists() || target.length() < 100_000_000L) {
-                    assets.open("aibondhu-q4_k_m.gguf").use { source ->
-                        target.outputStream().use { output -> source.copyTo(output) }
-                    }
+                if (hasGgufMagic(target)) {
+                    val ok = nativeLoadModel(target.absolutePath)
+                    runOnUiThread { modelReady = ok; status.text = if (ok) "বাংলা অফলাইন AI মডেল প্রস্তুত ✓" else "GGUF মডেল লোড ব্যর্থ — সঠিক মডেল ফাইল নির্বাচন করুন।" }
+                } else {
+                    runOnUiThread { status.text = "মডেল ফাইল নির্বাচন করুন: GGUF অথবা AIBondhu model ZIP" }
                 }
-                val ok = nativeLoadModel(target.absolutePath)
-                runOnUiThread {
-                    modelReady = ok
-                    status.text = if (ok) "বাংলা অফলাইন AI মডেল প্রস্তুত ✓" else "মডেল লোড হয়নি। মডেল ফাইল নির্বাচন করে চেষ্টা করুন।"
-                }
-            } catch (e: Exception) {
-                runOnUiThread { status.text = "মডেল লোড ত্রুটি: ${e.message} — GGUF ফাইল নির্বাচন করুন।" }
-            } catch (e: UnsatisfiedLinkError) {
-                runOnUiThread { status.text = "Native AI ইঞ্জিন চালু হয়নি: ${e.message}" }
-            }
+            } catch (e: UnsatisfiedLinkError) { runOnUiThread { status.text = "Native AI ইঞ্জিন চালু হয়নি: ${e.message}" } }
+            catch (e: Exception) { runOnUiThread { status.text = "মডেল পরীক্ষা ব্যর্থ: ${e.message}" } }
         }
+    }
+
+    private fun hasGgufMagic(file: File): Boolean {
+        if (!file.isFile || file.length() < 100_000_000L) return false
+        RandomAccessFile(file, "r").use { raf ->
+            val magic = ByteArray(4); raf.readFully(magic)
+            return magic.contentEquals(byteArrayOf(0x47, 0x47, 0x55, 0x46))
+        }
+    }
+
+    private fun selectedName(uri: Uri): String {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) return cursor.getString(0) ?: "selected-model"
+        }
+        return uri.lastPathSegment ?: "selected-model"
     }
 
     private fun importAndLoad(uri: Uri) {
-        status.text = "নির্বাচিত GGUF মডেল কপি ও লোড হচ্ছে…"
+        status.text = "মডেল ফাইল যাচাই ও প্রস্তুত হচ্ছে…"
         worker.execute {
             try {
                 val target = File(filesDir, "aibondhu-q4_k_m.gguf")
-                contentResolver.openInputStream(uri).use { source ->
-                    requireNotNull(source) { "ফাইল পড়া যায়নি" }.copyTo(target.outputStream())
+                val part = File(filesDir, "aibondhu-q4_k_m.gguf.part")
+                val name = selectedName(uri).lowercase()
+                contentResolver.openInputStream(uri).use { raw ->
+                    requireNotNull(raw) { "নির্বাচিত ফাইল পড়া যায়নি" }.use { stream ->
+                        if (name.endsWith(".zip")) {
+                            ZipInputStream(stream).use { zip ->
+                                var entry = zip.nextEntry; var found = false
+                                while (entry != null) {
+                                    if (!entry.isDirectory && entry.name.lowercase().endsWith(".gguf")) {
+                                        part.outputStream().use { output -> zip.copyTo(output) }; found = true; break
+                                    }
+                                    zip.closeEntry(); entry = zip.nextEntry
+                                }
+                                require(found) { "ZIP-এর ভিতরে .gguf মডেল পাওয়া যায়নি" }
+                            }
+                        } else { part.outputStream().use { output -> stream.copyTo(output) } }
+                    }
                 }
+                require(hasGgufMagic(part)) { "এটি সঠিক GGUF মডেল নয় অথবা ফাইল অসম্পূর্ণ। GitHub থেকে aibondhu-q4_k_m.gguf Export করা ফাইল দিন।" }
+                if (target.exists()) target.delete()
+                check(part.renameTo(target)) { "মডেল ফাইল সংরক্ষণ করা যায়নি" }
+                runOnUiThread { status.text = "GGUF মডেল যাচাই হয়েছে; AI ইঞ্জিন চালু হচ্ছে…" }
                 val ok = nativeLoadModel(target.absolutePath)
-                runOnUiThread {
-                    modelReady = ok
-                    status.text = if (ok) "অফলাইন মডেল প্রস্তুত ✓" else "মডেল লোড ব্যর্থ"
-                }
-            } catch (e: Exception) {
-                runOnUiThread { status.text = "ত্রুটি: ${e.message}" }
-            }
+                runOnUiThread { modelReady = ok; status.text = if (ok) "বাংলা অফলাইন AI মডেল প্রস্তুত ✓" else "GGUF সঠিক, কিন্তু llama.cpp লোড করতে পারেনি। Logcat পরীক্ষা দরকার।" }
+            } catch (e: UnsatisfiedLinkError) { runOnUiThread { status.text = "Native AI ইঞ্জিন চালু হয়নি: ${e.message}" } }
+            catch (e: Exception) { runOnUiThread { modelReady = false; status.text = "মডেল লোড ব্যর্থ: ${e.message}" } }
         }
     }
-
     private fun sendMessage() {
         val question = input.text.toString().trim()
         if (question.isEmpty()) return
